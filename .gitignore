@@ -1,0 +1,24 @@
+# secrets / local node credentials
+*.local.txt
+local.properties
+*.jks
+*.keystore
+
+# Gradle / build output
+.gradle/
+build/
+app/build/
+*.iml
+.idea/
+
+# sing-box upstream clone (large; build recipe in server/ + memory, 1-line patch documented)
+core/sing-box/
+
+# release signing
+keystore.properties
+orden-release.jks
+
+# sing-box upstream clones (large; build separately)
+core/sing-box-for-android/
+core/sing-box-for-apple/
+core/

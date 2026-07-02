@@ -1,0 +1,6 @@
+<resources>
+    <color name="tunnel_bg">#0B0C10</color>
+    <color name="ic_launcher_background">#1E2125</color>
+    <color name="widget_bg">#14161C</color>
+    <color name="widget_title">#C9CED6</color>
+</resources>
