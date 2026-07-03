@@ -9,7 +9,7 @@
 A privacy-first Android VPN client built on the [sing-box](https://github.com/SagerNet/sing-box) core.
 Paste a subscription link (or redeem an access code) and connect — no account, on-device, no logs.
 
-**Website:** [orden-351.pages.dev](https://joinorden.com) · **Download:** [latest release](../../releases/latest)
+**Website:** [joinorden.com](https://joinorden.com) · **Download:** [latest release](../../releases/latest)
 
 Modern DPI-resistant protocols (VLESS-Reality, Hysteria2/Salamander) with automatic failover — built to
 keep working on restricted, deep-packet-inspected networks where plain WireGuard/OpenVPN get blocked.
