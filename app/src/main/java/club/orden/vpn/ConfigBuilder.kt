@@ -129,6 +129,14 @@ object ConfigBuilder {
                         JSONArray()
                             .put(JSONObject().put("action", "sniff"))
                             .put(JSONObject().put("protocol", "dns").put("action", "hijack-dns"))
+                            // Reject all tunneled IPv6. The tun is dual-stack (ULA v6 addr + auto_route),
+                            // so apps that hardcode IPv6 endpoints — notably Telegram's DCs — pull IPv6
+                            // into the tunnel, where it black-holes on a node without v6 egress (e.g.
+                            // tokyo) or misbehaves (ULA source → global dst, RFC 6724): Telegram fails
+                            // for users on IPv6 networks. DNS is ipv4_only so nothing legit needs v6 here;
+                            // a reject makes those apps fall back to IPv4 instantly on every node. NOT the
+                            // same as dropping v6 from tun — that would leak v6 past the tunnel (real IP).
+                            .put(JSONObject().put("ip_version", 6).put("action", "reject"))
                             .apply {
                                 // ALL Russian domains + IP ranges bypass the VPN (real RU IP) via geoip/geosite.
                                 if (useRuleSets) put(JSONObject().put("rule_set", ruRuleSetTags()).put("outbound", "direct"))

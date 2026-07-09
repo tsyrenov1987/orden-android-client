@@ -19,8 +19,8 @@ android {
         applicationId = "club.orden"
         minSdk = 26
         targetSdk = 36
-        versionCode = 27
-        versionName = "1.9.17"
+        versionCode = 28
+        versionName = "1.9.18"
     }
 
     // Per-ABI APKs (each ~55 MB vs the 160 MB universal). Enabled only with -PabiSplit so the
