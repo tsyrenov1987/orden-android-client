@@ -49,8 +49,8 @@ class OrdenWidgetProvider : AppWidgetProvider() {
         fun push(context: Context, state: VpnState) {
             val s = when (state) {
                 VpnState.Connected -> "connected"
-                VpnState.Connecting -> "connecting"
-                VpnState.Disconnected -> "disconnected"
+                VpnState.Connecting, VpnState.Verifying -> "connecting"
+                VpnState.Disconnected, VpnState.NoServer -> "disconnected"
             }
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_STATE, s).apply()
             val mgr = AppWidgetManager.getInstance(context)

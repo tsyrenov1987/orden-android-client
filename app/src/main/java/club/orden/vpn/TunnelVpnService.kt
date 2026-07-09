@@ -20,6 +20,9 @@ import club.orden.BuildConfig
 import club.orden.MainActivity
 import club.orden.data.SettingsRepository
 import club.orden.widget.OrdenWidgetProvider
+import java.net.InetSocketAddress
+import java.net.Socket
+import org.json.JSONObject
 import io.nekohasekai.libbox.CommandServer
 import io.nekohasekai.libbox.CommandServerHandler
 import io.nekohasekai.libbox.ConnectionOwner
@@ -55,11 +58,16 @@ class TunnelVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
     @Volatile private var commandServer: CommandServer? = null
     @Volatile private var worker: Thread? = null
+    @Volatile private var attemptStartMs = 0L
+    // Bumped on every start/stop. The egress-probe captures its value and exits when it changes, so a
+    // probe from a previous session can't keep running against (and hot-reloading) a newer tunnel.
+    private val tunnelGen = java.util.concurrent.atomic.AtomicInteger(0)
 
     /** Set tunnel state and mirror it to the home-screen widget (widget failures never break the tunnel). */
     private fun setVpnState(state: VpnState) {
         TunnelController.setState(state)
         runCatching { OrdenWidgetProvider.push(applicationContext, state) }
+        runCatching { club.orden.widget.OrdenTileService.refreshTile(applicationContext) }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -73,6 +81,8 @@ class TunnelVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     private fun startTunnel() {
         if (worker != null) return
         setVpnState(VpnState.Connecting)
+        attemptStartMs = System.currentTimeMillis()
+        val gen = tunnelGen.incrementAndGet()
         startForeground(NOTIF_ID, buildNotification("Connecting…"))
         worker = thread(name = "tunnel-box") {
             try {
@@ -82,12 +92,22 @@ class TunnelVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                 server.start()
                 server.startOrReloadService(config, OverrideOptions())
                 commandServer = server
-                setVpnState(VpnState.Connected)
-                updateNotification("Connected")
-                Log.i(TAG, "tunnel up")
-                probeEgress()
+                // TUN is up — but NOT "Защищено" until real data actually flows through it.
+                setVpnState(VpnState.Verifying)
+                updateNotification("Проверка соединения…")
+                Log.i(TAG, "tunnel up, verifying connectivity")
+                verifyConnectivity(gen)
             } catch (e: Throwable) {
                 Log.e(TAG, "start failed", e)
+                val cls = ConnectReporter.classify(e)
+                // no_config = нет загруженного конфига (юзер ещё не ввёл код) — это ОНБОРДИНГ, а не
+                // сетевой сбой/ТСПУ. Не засоряем connect-телеметрию (иначе ложные «блокировки» в
+                // аналитике) и показываем понятный статус вместо «нет связи через сервер».
+                if (cls == "no_config") {
+                    updateNotification("Нет доступа — введите код в приложении")
+                } else {
+                    ConnectReporter.report(this, false, cls, System.currentTimeMillis() - attemptStartMs)
+                }
                 worker = null
                 setVpnState(VpnState.Disconnected)
                 stopTunnel()
@@ -95,20 +115,111 @@ class TunnelVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         }
     }
 
-    // Probe the egress IP through the tunnel (app-uid HTTPS) and publish it so the UI can resolve
-    // the active location. Also logs EGRESS= in debug builds for the connectivity self-test.
-    private fun probeEgress() {
+    // A green "Защищено" is only honest once real data actually flows THROUGH the tunnel — the server
+    // can be reachable while TSPU throttles the stream to nothing. So we probe the egress (short timeout)
+    // and only then go Connected; a dead channel surfaces as NoServer instead of a fake green. Keeps
+    // re-probing so the status self-heals if urltest later finds a working path.
+    private fun verifyConnectivity(gen: Int) {
         thread(name = "egress-probe") {
-            runCatching {
-                val c = java.net.URL("https://api.ipify.org")
-                    .openConnection() as java.net.HttpURLConnection
-                c.connectTimeout = 12000
-                c.readTimeout = 12000
-                val ip = c.inputStream.bufferedReader().use { it.readText() }.trim()
-                if (BuildConfig.DEBUG) Log.i(TAG, "EGRESS=$ip")
-                if (worker != null) TunnelController.setEgressIp(ip)
-            }.onFailure { Log.e(TAG, "egress probe failed: ${it.javaClass.simpleName}: ${it.message}") }
+            var attempt = 0
+            var connected = false
+            var everConnected = false   // после первого успеха warmup-грейс больше не применяется
+            var warmup = 0              // краткий грейс на ПЕРВОМ подключении, пока urltest выбирает ноду
+            // Runs for the LIFE of the session (gen-guarded), NOT just until the first success — TSPU can
+            // start throttling minutes after connect, so we keep re-probing to catch a green that went
+            // dead (was: return@thread on success -> "fake green" frozen forever + no self-heal).
+            while (worker != null && commandServer != null && gen == tunnelGen.get()) {
+                val (ip, probeErr) = probeEgressOnce(7000)
+                if (worker == null || gen != tunnelGen.get()) return@thread
+                if (ip != null) {
+                    if (!connected) {                       // report/flip only on the transition
+                        TunnelController.setEgressIp(ip)
+                        setVpnState(VpnState.Connected)
+                        updateNotification("Защищено")
+                        ConnectReporter.report(this, true, "", System.currentTimeMillis() - attemptStartMs)
+                        if (BuildConfig.DEBUG) Log.i(TAG, "EGRESS=$ip")
+                    }
+                    connected = true
+                    everConnected = true
+                    attempt = 0
+                    // Doze-friendly re-check cadence once healthy (don't wake the radio every few s).
+                    runCatching { Thread.sleep(60_000L) }
+                    continue
+                }
+                // Egress failed. Announce NoServer on the transition: either the first failure, or a loss
+                // AFTER we were Connected (the throttled-after-connect case this fix exists for).
+                val wasConnected = connected
+                connected = false
+                // Warmup-грейс на ПЕРВОМ подключении: urltest+тоннель устаканиваются пару секунд после
+                // подъёма — не флипаем в NoServer и НЕ шлём ложный провал на первых пробах (это и есть
+                // «первая проба таймаутит → ретрай ок» из телеметрии), просто ждём и пробуем снова.
+                // Статус остаётся «Проверка соединения…». Кап 2, чтобы реально мёртвый канал не завис.
+                if (!everConnected && warmup < 2) {
+                    warmup++
+                    Log.i(TAG, "egress warmup $warmup/2 — urltest settling, no false NoServer")
+                    runCatching { Thread.sleep(1500L) }
+                    continue
+                }
+                if (wasConnected || attempt == 0) {
+                    if (wasConnected) attemptStartMs = System.currentTimeMillis()  // fresh attempt clock
+                    setVpnState(VpnState.NoServer)
+                    updateNotification("Нет связи через сервер")
+                    // timeout = похоже на null-route/дроп, reset = похоже на активный RST (ТСПУ)
+                    ConnectReporter.report(this, false, "egress_$probeErr",
+                        System.currentTimeMillis() - attemptStartMs)
+                }
+                Log.w(TAG, "connectivity probe failed (#${++attempt}) — tunnel up, no egress")
+                // SEAMLESS SELF-HEAL: a dead egress often means the Reality dest/SNI got blocked and the
+                // server-side monitor rotated it. Re-fetch the config by code (bound to the underlying
+                // network in AccountClient, so it reaches the worker even while the tunnel is dead); if
+                // the SNI/nodes changed, hot-reload the tunnel onto the new config with NO user action.
+                if (selfHealConfig()) {
+                    runCatching { commandServer?.startOrReloadService(buildConfig(), OverrideOptions()) }
+                    attempt = 0
+                    attemptStartMs = System.currentTimeMillis() // новая логическая попытка после hot-reload
+                    continue
+                }
+                // Exponential backoff capped at 5 min: still self-heals if urltest later finds a path,
+                // but a stable-dead server no longer wakes the radio every 15s (was breaking Doze).
+                val backoffMs = minOf(5_000L shl minOf(attempt - 1, 6), 300_000L)
+                runCatching { Thread.sleep(backoffMs) }
+            }
         }
+    }
+
+    /**
+     * Pull a fresh config by access code and persist it if it changed. Returns true when the served
+     * config differs (e.g. the server rotated the Reality SNI after a block) so the caller hot-reloads
+     * the tunnel. Returns false when there's no code (debug-seeded field), the worker is unreachable,
+     * or the config is unchanged — then the caller just retries the existing tunnel.
+     */
+    private fun selfHealConfig(): Boolean {
+        val repo = SettingsRepository(applicationContext)
+        val code = runBlocking { repo.accessCode.first() }
+        if (code.isBlank()) return false
+        val fresh = AccountClient.redeem(code) ?: return false
+        val current = runBlocking { repo.subscriptionUrl.first() }
+        if (fresh.config == current) return false
+        runBlocking { repo.setAccess(code, fresh.config) }
+        Log.i(TAG, "self-heal: server rotated config → hot-reloading tunnel onto new SNI")
+        return true
+    }
+
+    /** One egress probe through the tunnel: egress IP to "" on success, null to error class on failure.
+     *  Бьём по IP-АДРЕСУ (1.1.1.1 Cloudflare trace), НЕ по хостнейму: проба не зависит от DNS-резолва
+     *  через тоннель. Раньше дёргали api.ipify.org (нужен DNS) → если DNS через тоннель ещё не готов
+     *  (первые секунды после подъёма) или ТСПУ дропает его — ложный egress_dns + ложный статус «нет
+     *  связи через сервер», хотя тоннель РАБОТАЕТ. egress-IP берём из строки ip= в /cdn-cgi/trace. */
+    private fun probeEgressOnce(timeoutMs: Int): Pair<String?, String> = try {
+        val c = java.net.URL("https://1.1.1.1/cdn-cgi/trace").openConnection() as java.net.HttpURLConnection
+        c.connectTimeout = timeoutMs
+        c.readTimeout = timeoutMs
+        val body = c.inputStream.bufferedReader().use { it.readText() }
+        val ip = body.lineSequence().firstOrNull { it.startsWith("ip=") }
+            ?.substringAfter("ip=")?.trim()?.takeIf { it.isNotBlank() }
+        if (ip != null) ip to "" else null to "empty"
+    } catch (e: Throwable) {
+        null to ConnectReporter.classify(e)
     }
 
     /** Build the sing-box config from the subscription field, falling back to the test node. */
@@ -119,14 +230,51 @@ class TunnelVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             nodes = SubscriptionParser.parse(TunnelConfig.testNodeLink) // debug-only test fallback
         }
         require(nodes.isNotEmpty()) { "no access link — get an invite from the club" }
+        nodes = preferVisionOverUdp(nodes)
         Log.i(TAG, "config: ${nodes.size} node(s)")
-        return ConfigBuilder.build(nodes)
+        // Pass the RU rule-set dir only if ALL bundled .srs installed (TunnelApp copies them from
+        // assets). If any is missing, ConfigBuilder omits the rule-set refs and routes via the legacy
+        // suffix list — a missing/half-copied .srs must never make sing-box reject the whole config.
+        val work = java.io.File(filesDir, "work")
+        val ruleSetsReady = ConfigBuilder.ruleSetFiles.all { java.io.File(work, it).exists() }
+        return ConfigBuilder.build(nodes, if (ruleSetsReady) work.path else null)
+    }
+
+    /**
+     * RU fixed-line (Rostelecom/TSPU) throttles UDP *throughput* while TCP:443 stays open — but the
+     * client's urltest races candidates by the latency of a tiny probe, so QUIC/hy2 wins the race
+     * and then crawls. Fix: while the tunnel is still DOWN (this runs before start, on the real
+     * network), if any VLESS(:443/TCP) node is reachable, drop the Hysteria2(UDP) outbounds so the
+     * race can't land on a throttled transport. If TCP is fully blocked (mobile DPI) or the probe
+     * can't run, keep hy2 as the lifeline. Runs on the tunnel-box thread (off main) — see caller.
+     */
+    private fun preferVisionOverUdp(nodes: List<JSONObject>): List<JSONObject> {
+        val vless = nodes.filter { it.optString("type") == "vless" }
+        val hasUdp = nodes.any { it.optString("type") == "hysteria2" }
+        if (vless.isEmpty() || !hasUdp) return nodes            // nothing to gate
+        val visionReachable = vless.any { n ->
+            runCatching {
+                Socket().use {
+                    it.connect(InetSocketAddress(n.optString("server"), n.optInt("server_port", 443)), 1500)
+                    true
+                }
+            }.getOrDefault(false)
+        }
+        if (!visionReachable) return nodes                       // TCP dead → keep hy2 lifeline
+        Log.i(TAG, "vision reachable — dropping hy2 (UDP) from the race")
+        return nodes.filter { it.optString("type") != "hysteria2" }
     }
 
     private fun stopTunnel() {
         worker = null
+        val myGen = tunnelGen.incrementAndGet()  // invalidate the egress-probe; also gate this teardown
+        val serverToClose = commandServer // close THIS session's server, not one a racing start() installed
         thread(name = "tunnel-stop") {
-            commandServer?.let { runCatching { it.closeService() }; runCatching { it.close() } }
+            serverToClose?.let { runCatching { it.closeService() }; runCatching { it.close() } }
+            // Если между stop и сюда прошёл новый start (он делает ++tunnelGen) — НЕ трогаем его
+            // состояние: иначе медленный closeService (>reconnect delay) обнулил бы уже поднятый
+            // commandServer нового сеанса, затёр бы Verifying и убил только что запущенный сервис.
+            if (myGen != tunnelGen.get()) return@thread
             commandServer = null
             setVpnState(VpnState.Disconnected)
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -135,8 +283,12 @@ class TunnelVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     }
 
     override fun onDestroy() {
+        tunnelGen.incrementAndGet()   // invalidate any probe/teardown tied to this instance
         commandServer?.let { runCatching { it.closeService() }; runCatching { it.close() } }
         commandServer = null
+        runCatching { monitorThread?.quitSafely() }  // не течь HandlerThread на каждый connect/disconnect
+        monitorThread = null
+        TunnelController.underlyingNetwork = null
         setVpnState(VpnState.Disconnected)
         super.onDestroy()
     }
@@ -198,7 +350,10 @@ class TunnelVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
     private val cm get() = getSystemService(ConnectivityManager::class.java)
     private var netCallback: ConnectivityManager.NetworkCallback? = null
-    private val monitorHandler by lazy { Handler(HandlerThread("tunnel-net").apply { start() }.looper) }
+    @Volatile private var monitorThread: HandlerThread? = null
+    private val monitorHandler by lazy {
+        HandlerThread("tunnel-net").apply { start(); monitorThread = this }.let { Handler(it.looper) }
+    }
 
     override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
         // Track the UNDERLYING (non-VPN) default network. registerDefaultNetworkCallback reports
@@ -231,6 +386,8 @@ class TunnelVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     }
 
     private fun reportDefault(listener: InterfaceUpdateListener, network: Network?) {
+        // Control-plane (worker) calls bind to this so they bypass the tunnel — see AccountClient.
+        TunnelController.underlyingNetwork = network
         if (network == null) { listener.updateDefaultInterface("", -1, false, false); return }
         repeat(10) {
             val name = cm.getLinkProperties(network)?.interfaceName
@@ -246,6 +403,9 @@ class TunnelVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
         netCallback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
         netCallback = null
+        // Сбросить stale-ссылку: без монитора её некому обновить, а привязка control-plane к мёртвой
+        // сети (после смены wifi↔cellular при выключенном VPN) ломала бы кабинет. null -> fallback на default.
+        TunnelController.underlyingNetwork = null
     }
 
     // Enumerate only real connectivity networks (NOT tun0/dummy0/loopback junk), with

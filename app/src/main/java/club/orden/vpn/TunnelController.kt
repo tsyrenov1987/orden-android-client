@@ -7,7 +7,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-enum class VpnState { Disconnected, Connecting, Connected }
+// Verifying: TUN up, checking real connectivity through the tunnel. Connected: verified (data flows).
+// NoServer: TUN up but the egress probe failed — the channel is dead (e.g. TSPU throttling), an
+// honest error instead of a fake "protected".
+enum class VpnState { Disconnected, Connecting, Verifying, Connected, NoServer }
 
 /** Process-wide tunnel state + start/stop entry points. The service is the source of truth. */
 object TunnelController {
@@ -21,6 +24,11 @@ object TunnelController {
     /** Measured egress IP once connected (null until probed) — the app maps it to a location label. */
     private val _egressIp = MutableStateFlow<String?>(null)
     val egressIp: StateFlow<String?> = _egressIp.asStateFlow()
+
+    /** The underlying (non-VPN) network. Control-plane calls to the worker (redeem/self-heal/report)
+     * bind to it so they DON'T ride the tunnel — otherwise, when the egress is dead, the "not working"
+     * report and the config re-fetch that would fix it both black-hole through the dead tunnel. */
+    @Volatile var underlyingNetwork: android.net.Network? = null
 
     internal fun setState(s: VpnState) {
         if (s == VpnState.Connected && _state.value != VpnState.Connected) {

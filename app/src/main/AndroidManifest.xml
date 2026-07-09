@@ -31,6 +31,7 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="joinorden.com" android:pathPrefix="/activate" />
                 <data android:scheme="https" android:host="orden.tsyrenov1987.workers.dev" android:pathPrefix="/activate" />
                 <data android:scheme="https" android:host="orden.club" android:pathPrefix="/activate" />
             </intent-filter>
@@ -60,6 +61,18 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/orden_widget_info" />
         </receiver>
+
+        <!-- Quick Settings tile: connect/disconnect from the notification shade. -->
+        <service
+            android:name=".widget.OrdenTileService"
+            android:exported="true"
+            android:icon="@drawable/orden_shield"
+            android:label="Orden VPN"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
 
     </application>
 

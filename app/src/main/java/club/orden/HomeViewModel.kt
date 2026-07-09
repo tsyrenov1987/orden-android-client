@@ -44,6 +44,19 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearError() { _error.value = null }
 
+    // Обновление приложения: на старте спрашиваем воркер /version; если опубликованный code выше нашего —
+    // показываем баннер с кнопкой на страницу загрузки. Тихо игнорируем сбой сети (не мешаем работе).
+    private val _update = MutableStateFlow<AccountClient.VersionInfo?>(null)
+    val update: StateFlow<AccountClient.VersionInfo?> = _update.asStateFlow()
+    fun dismissUpdate() { _update.value = null }
+
+    init {
+        viewModelScope.launch {
+            val v = withContext(Dispatchers.IO) { runCatching { AccountClient.latestVersion() }.getOrNull() }
+            if (v != null && v.code > BuildConfig.VERSION_CODE) _update.value = v
+        }
+    }
+
     /** Redeem an access code: fetch config + account, persist both. */
     fun redeem(code: String) {
         val c = code.trim().uppercase()

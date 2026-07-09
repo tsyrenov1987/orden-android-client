@@ -19,8 +19,8 @@ android {
         applicationId = "club.orden"
         minSdk = 26
         targetSdk = 36
-        versionCode = 10
-        versionName = "1.9"
+        versionCode = 27
+        versionName = "1.9.17"
     }
 
     // Per-ABI APKs (each ~55 MB vs the 160 MB universal). Enabled only with -PabiSplit so the
@@ -31,6 +31,17 @@ android {
             reset()
             include("arm64-v8a", "armeabi-v7a", "x86_64")
             isUniversalApk = false
+        }
+    }
+
+    // Сжимаем нативные .so в APK (libbox.so от sing-box = 52 МБ, хранилась НЕСЖАТОЙ). Go-бинарь
+    // жмётся ~2.5-3× → APK для скачивания ~61→~30 МБ, что критично для РФ (Cloudflare-троттлинг
+    // ~16 КБ/соединение). Чисто упаковка: .so байт-в-байт идентична в рантайме (распаковывается в
+    // /data при установке) → НОЛЬ влияния на подключение/качество. Цена — распаковка при установке
+    // (кратковременный расход диска), для тяжёлого скачивания в РФ выгодный размен.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 

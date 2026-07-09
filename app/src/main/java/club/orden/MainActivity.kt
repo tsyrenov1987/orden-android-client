@@ -75,6 +75,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
-        val ALLOWED_HOSTS = setOf("orden.tsyrenov1987.workers.dev", "orden.club")
+        val ALLOWED_HOSTS = setOf("joinorden.com", "orden.tsyrenov1987.workers.dev", "orden.club")
     }
 }
