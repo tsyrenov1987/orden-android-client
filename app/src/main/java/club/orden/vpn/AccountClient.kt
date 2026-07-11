@@ -18,7 +18,7 @@ object AccountClient {
 
     /** Latest published app version from the worker (/version); compare code to BuildConfig.VERSION_CODE. */
     fun latestVersion(): VersionInfo? {
-        val body = request("GET", "/version", null, null) ?: return null
+        val body = request("GET", "/api/version", null, null) ?: return null
         val o = runCatching { JSONObject(body) }.getOrNull() ?: return null
         return VersionInfo(
             o.optInt("code", 0), o.optString("version", ""),
@@ -28,7 +28,7 @@ object AccountClient {
     }
 
     fun redeem(code: String): Redeemed? {
-        val body = request("POST", "/redeem", JSONObject().put("code", code).toString(), null) ?: return null
+        val body = request("POST", "/api/redeem", JSONObject().put("code", code).toString(), null) ?: return null
         val o = runCatching { JSONObject(body) }.getOrNull() ?: return null
         val config = o.optString("config", "")
         val acct = o.optJSONObject("account") ?: return null
@@ -37,7 +37,7 @@ object AccountClient {
     }
 
     fun account(code: String): CabinetInfo? {
-        val body = request("GET", "/account", null, code) ?: return null
+        val body = request("GET", "/api/account", null, code) ?: return null
         val o = runCatching { JSONObject(body) }.getOrNull() ?: return null
         if (o.has("error")) return null
         return parseAccount(o)
@@ -47,14 +47,14 @@ object AccountClient {
     fun reportHealth(code: String, results: Map<String, Boolean>) {
         val r = JSONObject()
         results.forEach { (k, v) -> r.put(k, v) }
-        request("POST", "/report/health", JSONObject().put("code", code).put("results", r).toString(), null)
+        request("POST", "/api/report/health", JSONObject().put("code", code).put("results", r).toString(), null)
     }
 
     /** Отправить батч исходов попыток подключения (диагностика). true = принято воркером. */
     fun reportConnect(code: String, attempts: List<JSONObject>): Boolean {
         val arr = org.json.JSONArray()
         attempts.forEach { arr.put(it) }
-        return request("POST", "/report/connect",
+        return request("POST", "/api/report/connect",
             JSONObject().put("code", code).put("attempts", arr).toString(), null) != null
     }
 
@@ -81,17 +81,26 @@ object AccountClient {
     }
 
     private fun request(method: String, path: String, json: String?, bearer: String?): String? {
-        val url = URL(TunnelConfig.apiBase + path)
         // Bind to the underlying (non-VPN) network so control-plane calls (self-heal redeem, /report/*,
         // /account) reach the worker even when the tunnel's egress is dead — otherwise the "not working"
         // report and the config re-fetch that would fix it both black-hole through the dead tunnel.
         val net = TunnelController.underlyingNetwork
-        val r = attempt(net, url, method, json, bearer)
-        // Ретрай через default-сеть ТОЛЬКО если запрос НЕ дошёл до сервера (сетевой сбой на stale
-        // underlyingNetwork после смены wifi↔cellular). На ПОЛУЧЕННОМ HTTP-статусе (4xx/5xx) второй
-        // POST = двойной side-effect (/report/*, /redeem) — не ретраим.
-        if (r.reachedServer || net == null) return r.body
-        return attempt(null, url, method, json, bearer).body
+        // Try each backend host in order (TunnelConfig.apiHosts). We advance to the NEXT host ONLY when a
+        // host was never reached (network failure / DPI block) — never after we got an HTTP status, since a
+        // received status means the side-effect (/redeem, /report/*) already happened and retrying it on
+        // another host would double it. Within a host we still retry on the default network on a stale
+        // underlyingNetwork (wifi↔cellular switch), with the same "reachedServer" guard.
+        for (base in TunnelConfig.apiHosts) {
+            val url = URL(base + path)
+            val r = attempt(net, url, method, json, bearer)
+            if (r.reachedServer) return r.body
+            if (net != null) {
+                val r2 = attempt(null, url, method, json, bearer)
+                if (r2.reachedServer) return r2.body
+            }
+            // Neither the underlying nor the default network reached this host -> try the next host.
+        }
+        return null
     }
 
     private data class Attempt(val reachedServer: Boolean, val body: String?)

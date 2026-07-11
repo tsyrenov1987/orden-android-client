@@ -25,14 +25,14 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- One-tap activation App Link. workers.dev works today; orden.club is pre-baked so
-                 switching the bot to it later needs no APK rebuild (just serve assetlinks there). -->
+            <!-- One-tap activation App Link. Primary is joinorden.com; orden.club is pre-baked so
+                 switching to it later needs no APK rebuild (just serve assetlinks there). The operator's
+                 personal *.workers.dev host is intentionally NOT listed — it must not ship in the APK. -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="joinorden.com" android:pathPrefix="/activate" />
-                <data android:scheme="https" android:host="orden.tsyrenov1987.workers.dev" android:pathPrefix="/activate" />
                 <data android:scheme="https" android:host="orden.club" android:pathPrefix="/activate" />
             </intent-filter>
         </activity>
