@@ -1,6 +1,8 @@
 package club.orden
 
 import android.app.Application
+import android.content.Context
+import club.orden.vpn.AccountClient
 import club.orden.vpn.ConfigBuilder
 import club.orden.vpn.VpnState
 import club.orden.widget.OrdenWidgetProvider
@@ -28,6 +30,16 @@ class TunnelApp : Application() {
         // A fresh process has no active tunnel (the VPN service dies with the process). Reconcile the
         // widget so it never shows a stale "connected" left over from a killed process.
         runCatching { OrdenWidgetProvider.push(this, VpnState.Disconnected) }
+
+        // Wire the signed DoH bootstrap (audit #3 phase-3): load previously-adopted backend hosts and
+        // persist any new ones the client verifies when the primary domain gets blocked.
+        val bp = getSharedPreferences("orden_bootstrap", Context.MODE_PRIVATE)
+        bp.getString("hosts", null)?.takeIf { it.isNotBlank() }?.let {
+            AccountClient.setExtraHosts(it.split(",").filter(String::isNotBlank))
+        }
+        AccountClient.onBootstrap = { hosts ->
+            runCatching { bp.edit().putString("hosts", hosts.joinToString(",")).apply() }
+        }
     }
 
     // Copy the bundled RU rule-sets from assets into sing-box's working dir so route.rule_set

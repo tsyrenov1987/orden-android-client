@@ -16,6 +16,16 @@ object AccountClient {
     data class Redeemed(val config: String, val info: CabinetInfo)
     data class VersionInfo(val code: Int, val version: String, val url: String, val mandatory: Boolean, val notes: String)
 
+    // Hosts adopted at runtime from a verified DoH bootstrap (audit #3 phase-3), tried after the
+    // compiled apiHosts. Loaded from storage at startup (setExtraHosts) and refreshed on all-hosts-fail.
+    @Volatile private var extraHosts: List<String> = emptyList()
+
+    /** Seed the runtime bootstrap hosts (e.g. from persisted storage) at app startup. */
+    fun setExtraHosts(hosts: List<String>) { extraHosts = hosts.filter { it.startsWith("https://") } }
+
+    /** Called with freshly-adopted (verified) bootstrap hosts so the app layer can persist them. */
+    var onBootstrap: ((List<String>) -> Unit)? = null
+
     /** Latest published app version from the worker (/version); compare code to BuildConfig.VERSION_CODE. */
     fun latestVersion(): VersionInfo? {
         val body = request("GET", "/api/version", null, null) ?: return null
@@ -85,20 +95,34 @@ object AccountClient {
         // /account) reach the worker even when the tunnel's egress is dead — otherwise the "not working"
         // report and the config re-fetch that would fix it both black-hole through the dead tunnel.
         val net = TunnelController.underlyingNetwork
-        // Try each backend host in order (TunnelConfig.apiHosts). We advance to the NEXT host ONLY when a
-        // host was never reached (network failure / DPI block) — never after we got an HTTP status, since a
-        // received status means the side-effect (/redeem, /report/*) already happened and retrying it on
-        // another host would double it. Within a host we still retry on the default network on a stale
-        // underlyingNetwork (wifi↔cellular switch), with the same "reachedServer" guard.
-        for (base in TunnelConfig.apiHosts) {
+        // First try the compiled hosts + any bootstrap hosts adopted earlier.
+        tryHosts(TunnelConfig.apiHosts + extraHosts, net, method, path, json, bearer)?.let { return it.body }
+        // Every host was unreachable (DPI block of the domain). Fetch a SIGNED fresh host list over DoH,
+        // adopt it, and retry ONCE. Safe to retry: reaching here means no host was reached, so no
+        // side-effect (/redeem, /report/*) happened yet.
+        val fresh = BootstrapClient.fetch()
+        if (fresh != null && fresh.isNotEmpty() && fresh != extraHosts) {
+            extraHosts = fresh
+            onBootstrap?.invoke(fresh)
+            tryHosts(fresh, net, method, path, json, bearer)?.let { return it.body }
+        }
+        return null
+    }
+
+    // Try each host in order. Returns the first Attempt that REACHED a server (even a 4xx/5xx, body may be
+    // null) — never advancing after a received status, since that side-effect already happened and a retry
+    // would double it. Returns null only if NO host was reachable at all. Within a host, retries on the
+    // default network on a stale underlyingNetwork (wifi↔cellular switch), with the same reachedServer guard.
+    private fun tryHosts(hosts: List<String>, net: android.net.Network?, method: String, path: String,
+                         json: String?, bearer: String?): Attempt? {
+        for (base in hosts) {
             val url = URL(base + path)
             val r = attempt(net, url, method, json, bearer)
-            if (r.reachedServer) return r.body
+            if (r.reachedServer) return r
             if (net != null) {
                 val r2 = attempt(null, url, method, json, bearer)
-                if (r2.reachedServer) return r2.body
+                if (r2.reachedServer) return r2
             }
-            // Neither the underlying nor the default network reached this host -> try the next host.
         }
         return null
     }
