@@ -70,8 +70,8 @@ object AccountClient {
         }
         return CabinetInfo(
             plan = o.optString("plan", "").ifBlank { null },
-            usedBytes = up + down,
-            totalBytes = 0, // this model is unlimited
+            usedBytes = o.optLong("used", up + down), // байты в счёт капа (месячные для платных); фолбэк — старый воркер
+            totalBytes = o.optLong("total", 0),       // кап в байтах из /account; 0 = безлимит (comp/близкие)
             expireEpoch = o.optLong("expire", 0),
             ref = o.optString("ref", ""),
             refCount = o.optInt("refCount", 0),
