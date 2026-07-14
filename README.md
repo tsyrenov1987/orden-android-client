@@ -60,6 +60,14 @@ DPI-устойчивые протоколы **VLESS-Reality** и **Hysteria2/Sal
 новые ключи. Всё на устройстве, без аккаунта, без логов, без сторонней аналитики. Код открыт — можно
 проверить, что именно делает приложение, перед запуском. Лицензия MIT.
 
+## Guides / Гайды
+
+Troubleshooting and setup guides (RU) for people running this client on restricted networks:
+
+- [Почему VPN не работает](https://joinorden.com/pochemu-vpn-ne-rabotaet) · [Интернет пропадает при включённом VPN](https://joinorden.com/internet-propadaet-s-vpn)
+- [VPN на Android без Google Play](https://joinorden.com/vpn-android-without-google-play) · [Как настроить на iPhone](https://joinorden.com/kak-ustanovit-vpn-na-iphone-v-rossii)
+- [Что такое ТСПУ](https://joinorden.com/chto-takoe-tspu) · [Какой VPN работает в России 2026](https://joinorden.com/kakoy-vpn-rabotaet-v-rossii-2026)
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
