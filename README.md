@@ -47,6 +47,12 @@ signed release. The sing-box core (`Libbox`) is built separately; see the build 
 App endpoints live in `app/src/main/java/club/orden/vpn/TunnelConfig.kt`. There are **no credentials in
 source** — you supply your own node via a subscription URL at runtime.
 
+The sing-box configuration this client generates is published separately, with credentials stripped:
+**[orden-singbox-configs](https://github.com/tsyrenov1987/orden-singbox-configs)** — VLESS-Reality ↔
+Hysteria2 auto-failover, Russian split-tunnel, and six production gotchas explained (why the `urltest`
+health-check must target an IP, why rule-sets have to be bundled rather than fetched, why tunnelled
+IPv6 has to be rejected, and three more).
+
 ## Privacy
 
 The client collects nothing. It talks only to (a) the node(s) in your subscription and (b) the backend
