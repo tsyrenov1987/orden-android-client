@@ -73,6 +73,8 @@ Troubleshooting and setup guides (RU) for people running this client on restrict
 - [Почему VPN не работает](https://joinorden.com/pochemu-vpn-ne-rabotaet) · [Интернет пропадает при включённом VPN](https://joinorden.com/internet-propadaet-s-vpn)
 - [VPN на Android без Google Play](https://joinorden.com/vpn-android-without-google-play) · [Как настроить на iPhone](https://joinorden.com/kak-ustanovit-vpn-na-iphone-v-rossii)
 - [Что такое ТСПУ](https://joinorden.com/chto-takoe-tspu) · [Какой VPN работает в России 2026](https://joinorden.com/kakoy-vpn-rabotaet-v-rossii-2026)
+- [sing-box: configuration is invalid](https://joinorden.com/sing-box-configuration-is-invalid) · [sing-box не запускается](https://joinorden.com/sing-box-ne-zapuskaetsya)
+- [Почему ключи из каналов умирают](https://joinorden.com/pochemu-klyuchi-umirayut) · [Что такое VLESS Reality](https://joinorden.com/vless-reality) · [Hysteria2](https://joinorden.com/hysteria2)
 
 ## License
 
