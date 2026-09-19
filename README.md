@@ -30,6 +30,40 @@ no analytics or logging built in. You can read exactly what it does before you r
   `vless://`, `ss://` and `hysteria2://` share links.
 - **Small & focused:** a clean Kotlin/Compose UI over the sing-box core, nothing else.
 
+## What survives DPI filtering in 2026 — field notes
+
+Operational notes from running this client and its nodes against Russian ТСПУ filtering. They are
+protocol-level and apply to any sing-box/Xray client, not just this one.
+
+- **The brand of a VPN does not matter; the protocol does.** Blocking is done by traffic signature,
+  so switching server country changes nothing while the protocol stays recognisable.
+- **Plain WireGuard and OpenVPN go first.** WireGuard's handshake is a fixed-size, fixed-shape first
+  packet; OpenVPN carries a recognisable opcode. Both are detectable on the first packet, before any
+  payload is seen.
+- **VLESS + XTLS-Reality survives longest.** Reality borrows the real TLS handshake of a large cover
+  site, so the SNI, the certificate and the handshake all belong to a genuine popular domain. No own
+  domain or certificate is required. Blocking it means blocking the cover site.
+- **Hysteria2 (QUIC/UDP, Salamander obfuscation) wins on lossy links** — mobile networks, long routes,
+  packet loss — because it does not collapse on retransmits. But some networks throttle or drop UDP
+  wholesale, so it is a second protocol, not a replacement: keep both and switch automatically.
+- **Endpoint reputation matters more than country.** Addresses shared by thousands of users are
+  identified by volume and blocklisted in batches; rotation and a pool of addresses beat picking a
+  "better" country.
+- **Split-tunnelling is not a convenience, it is a requirement.** Russian banking and government
+  services break on a foreign IP, so `.ru` traffic must keep the real IP while everything else is
+  tunnelled — otherwise people simply turn the VPN off.
+- **Health-checks must target an IP, not a domain** — a DNS lookup made through a half-dead tunnel
+  hangs, and the check reports "alive" long after the node stopped passing traffic. This and five
+  more production gotchas are written up in
+  [orden-singbox-configs](https://github.com/tsyrenov1987/orden-singbox-configs).
+
+Longer write-ups with the user-facing symptoms: [what actually works in Russia in
+2026](https://joinorden.com/kakoy-vpn-rabotaet-v-rossii-2026) ·
+[why a VPN that worked yesterday stops today](https://joinorden.com/pochemu-vpn-ne-rabotaet) ·
+[YouTube still broken with a VPN on](https://joinorden.com/yutub-ne-rabotaet-s-vpn) ·
+[what ТСПУ is](https://joinorden.com/chto-takoe-tspu). A plain-text dump of all of them, for
+offline or machine reading, lives at [llms-full.txt](https://joinorden.com/llms-full.txt).
+
 ## Build
 
 Standard Android project (Kotlin + Jetpack Compose).
@@ -75,6 +109,7 @@ Troubleshooting and setup guides (RU) for people running this client on restrict
 - [Что такое ТСПУ](https://joinorden.com/chto-takoe-tspu) · [Какой VPN работает в России 2026](https://joinorden.com/kakoy-vpn-rabotaet-v-rossii-2026)
 - [sing-box: configuration is invalid](https://joinorden.com/sing-box-configuration-is-invalid) · [sing-box не запускается](https://joinorden.com/sing-box-ne-zapuskaetsya)
 - [Почему ключи из каналов умирают](https://joinorden.com/pochemu-klyuchi-umirayut) · [Что такое VLESS Reality](https://joinorden.com/vless-reality) · [Hysteria2](https://joinorden.com/hysteria2)
+- На мобильной сети: [МТС](https://joinorden.com/vpn-ne-rabotaet-na-mts) · [Билайн](https://joinorden.com/vpn-ne-rabotaet-na-beeline) · [все операторы](https://joinorden.com/vpn-dlya-mobilnyh-operatorov-rossii)
 
 ## License
 
